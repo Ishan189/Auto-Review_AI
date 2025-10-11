@@ -84,6 +84,186 @@ def check_api_status():
         return False
 
 
+def process_submission_with_tracking(submission, index, total, auto_submit=False):
+    """
+    Process a single submission with result tracking
+    Returns: (success: bool, result_type: str)
+    result_type: 'pdf_graded', 'doc_rejected', 'zip_rejected', 'invalid_format', 'no_files'
+    """
+    attempt_id = submission["attempt_id"]
+    student_name = submission.get("name", "Unknown")
+    assignment_name = submission.get("assessment_name", "Unknown Assignment")
+    
+    print(f"\n📚 [{index}] {student_name} - {assignment_name}")
+    print(f"   Attempt ID: {attempt_id}")
+    
+    try:
+        # Step 1: Fetch details
+        print(f"   🔍 Fetching details...")
+        details = fetch_submission_details(attempt_id)
+        
+        # Step 2: Download files
+        print(f"   📥 Downloading files...")
+        files = download_submission_files(details)
+        
+        if not files:
+            print(f"   ⚠️ No files found for this submission")
+            
+            # Submit feedback about missing files if auto_submit is enabled
+            if auto_submit:
+                marks = 0
+                feedback_html = f"""<div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.8; color: #d32f2f; padding: 15px;">
+<p><strong>⚠️ No File Submitted</strong></p>
+<p>Hi! I see you submitted this assignment, but <strong>no file was attached</strong>.</p>
+<p><strong>What happened:</strong> You may have clicked submit without uploading your assignment file.</p>
+<p><strong>What to do:</strong><br>
+1. Prepare your assignment as a PDF file<br>
+2. Go back to the assignment page<br>
+3. Click "Add submission" or "Edit submission"<br>
+4. Upload your PDF file<br>
+5. Click Submit</p>
+<p>Please upload your file to receive a grade. Your work will be automatically reviewed once you submit it!</p>
+</div>"""
+                
+                print(f"\n   📋 SUBMITTING 'NO FILE' FEEDBACK:")
+                print(f"   Student: {student_name}")
+                print(f"   Assignment: {assignment_name}")
+                print(f"   Score: 0/100 (No file uploaded)")
+                
+                success, response = submit_marks_and_feedback(details, marks, feedback_html)
+                
+                if success:
+                    print(f"   ✅ Feedback submitted!")
+                else:
+                    print(f"   ⚠️  Failed to submit feedback")
+            
+            return True, 'no_files'
+        
+        print(f"   ✅ Downloaded {len(files)} file(s)")
+        
+        # Step 3: Review first file
+        main_file = files[0]
+        print(f"   🤖 Reviewing {os.path.basename(main_file)}...")
+        
+        review_result = review_assignment(main_file)
+        
+        # Determine result type
+        file_ext = os.path.splitext(main_file)[1].lower()
+        result_type = 'unknown'
+        
+        if not review_result['is_valid_format']:
+            if file_ext in ['.doc', '.docx']:
+                result_type = 'doc_rejected'
+            elif file_ext == '.zip':
+                result_type = 'zip_rejected'
+            else:
+                result_type = 'invalid_format'
+        elif review_result['can_review']:
+            result_type = 'pdf_graded'
+        
+        # Show review result
+        if not review_result['is_valid_format']:
+            print(f"   {review_result['feedback']}")
+        elif not review_result['can_review']:
+            print(f"   {review_result['feedback']}")
+        else:
+            print(f"   ✅ Review Complete!")
+            if review_result['suggested_marks']:
+                print(f"   📊 Score: {review_result['suggested_marks']}/100")
+        
+        # Submit feedback
+        if auto_submit:
+            if not review_result['is_valid_format']:
+                marks = 0
+                
+                if '.doc' in review_result['feedback'].lower():
+                    feedback_html = f"""<div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.8; color: #ff9800; padding: 15px;">
+<p><strong>📄 Document Format Not Supported</strong></p>
+<p>Hi! You submitted a .doc/.docx file, which cannot be automatically reviewed by our system.</p>
+<p><strong>Required Format:</strong> Please convert your document to <strong>PDF</strong> format.</p>
+<p><strong>How to convert:</strong><br>
+1. Open your .doc/.docx file<br>
+2. Click "File" → "Save As" or "Export"<br>
+3. Choose "PDF" as the format<br>
+4. Resubmit the PDF file</p>
+<p>Once you resubmit as PDF, your work will be automatically reviewed and graded. Thank you!</p>
+</div>"""
+                else:
+                    feedback_html = f"""<div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.8; color: #d32f2f; padding: 15px;">
+<p><strong>⚠️ Invalid File Format</strong></p>
+<p>Hi! You submitted a file in an unsupported format.</p>
+<p><strong>Issue:</strong> {review_result['feedback']}</p>
+<p><strong>Required Format:</strong> Please resubmit as <strong>PDF</strong>.</p>
+<p><strong>What to do:</strong><br>
+1. Convert your code/solutions to PDF format<br>
+2. Make sure all your code is visible and readable<br>
+3. Resubmit the assignment</p>
+<p>Please resubmit in PDF format to receive a grade. Looking forward to reviewing your work!</p>
+</div>"""
+                
+                print(f"\n   📋 SUBMITTING FORMAT ERROR FEEDBACK:")
+                print(f"   Student: {student_name}")
+                print(f"   Assignment: {assignment_name}")
+                print(f"   Score: 0/100 (Invalid format)")
+                
+                success, response = submit_marks_and_feedback(details, marks, feedback_html)
+                
+                if success:
+                    print(f"\n   🗑️  Cleaning up invalid file...")
+                    for file_path in files:
+                        try:
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+                                print(f"   ✅ Deleted: {os.path.basename(file_path)}")
+                        except Exception as e:
+                            print(f"   ⚠️  Could not delete {os.path.basename(file_path)}: {e}")
+                
+            elif review_result['can_review']:
+                marks = review_result['suggested_marks'] or 0
+                feedback_html = format_feedback_for_submission(review_result)
+                
+                print(f"\n   📋 SUBMISSION DETAILS:")
+                print(f"   Student: {student_name}")
+                print(f"   Assignment: {assignment_name}")
+                print(f"   Score: {marks}/100")
+                
+                clean_feedback = review_result['review']
+                if '=== SCORE ===' in clean_feedback:
+                    clean_feedback = clean_feedback.split('=== SCORE ===')[0].strip()
+                if '=== REVIEW ===' in clean_feedback:
+                    clean_feedback = clean_feedback.split('=== REVIEW ===')[1].strip()
+                
+                char_count = len(clean_feedback)
+                print(f"\n   💬 FEEDBACK ({char_count} chars):")
+                print(f"   " + "="*50)
+                
+                for line in clean_feedback.split('\n'):
+                    if line.strip():
+                        print(f"   {line}")
+                print(f"   " + "="*50)
+                
+                success, response = submit_marks_and_feedback(details, marks, feedback_html)
+                
+                if success:
+                    print(f"\n   🗑️  Cleaning up downloaded files...")
+                    for file_path in files:
+                        try:
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+                                print(f"   ✅ Deleted: {os.path.basename(file_path)}")
+                        except Exception as e:
+                            print(f"   ⚠️  Could not delete {os.path.basename(file_path)}: {e}")
+                else:
+                    print(f"   ⚠️  Submission failed - files kept for manual review")
+                    return False, result_type
+        
+        return True, result_type
+        
+    except Exception as e:
+        print(f"   ❌ Error: {e}")
+        return False, 'error'
+
+
 def process_submission(submission, index, total, auto_submit=False):
     """
     Process a single submission - fetch details, download, review, and optionally submit
@@ -132,48 +312,98 @@ def process_submission(submission, index, total, auto_submit=False):
             if review_result['suggested_marks']:
                 print(f"   📊 Score: {review_result['suggested_marks']}/100")
         
-        # Step 5: Submit if enabled
-        if auto_submit and review_result['can_review']:
-            marks = review_result['suggested_marks'] or 0
-            feedback_html = format_feedback_for_submission(review_result)
-            
-            # Show what we're submitting
-            print(f"\n   📋 SUBMISSION DETAILS:")
-            print(f"   Student: {student_name}")
-            print(f"   Assignment: {assignment_name}")
-            print(f"   Score: {marks}/100")
-            
-            # Show clean feedback (without HTML tags)
-            clean_feedback = review_result['review']
-            if '=== SCORE ===' in clean_feedback:
-                clean_feedback = clean_feedback.split('=== SCORE ===')[0].strip()
-            if '=== REVIEW ===' in clean_feedback:
-                clean_feedback = clean_feedback.split('=== REVIEW ===')[1].strip()
-            
-            char_count = len(clean_feedback)
-            print(f"\n   💬 FEEDBACK ({char_count} chars):")
-            print(f"   " + "="*50)
-            
-            # Print feedback with indentation
-            for line in clean_feedback.split('\n'):
-                if line.strip():
-                    print(f"   {line}")
-            print(f"   " + "="*50)
-            
-            success, response = submit_marks_and_feedback(details, marks, feedback_html)
-            
-            if success:
-                # Delete downloaded files after successful submission
-                print(f"\n   🗑️  Cleaning up downloaded files...")
-                for file_path in files:
-                    try:
-                        if os.path.exists(file_path):
-                            os.remove(file_path)
-                            print(f"   ✅ Deleted: {os.path.basename(file_path)}")
-                    except Exception as e:
-                        print(f"   ⚠️  Could not delete {os.path.basename(file_path)}: {e}")
-            else:
-                print(f"   ⚠️  Submission failed - files kept for manual review")
+        # Step 5: Submit feedback (even for invalid formats)
+        if auto_submit:
+            # For invalid file formats, submit 0 marks with format error message
+            if not review_result['is_valid_format']:
+                marks = 0
+                
+                # Customize message based on file type
+                if '.doc' in review_result['feedback'].lower():
+                    feedback_html = f"""<div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.8; color: #ff9800; padding: 15px;">
+<p><strong>📄 Document Format Not Supported</strong></p>
+<p>Hi! You submitted a .doc/.docx file, which cannot be automatically reviewed by our system.</p>
+<p><strong>Required Format:</strong> Please convert your document to <strong>PDF</strong> format.</p>
+<p><strong>How to convert:</strong><br>
+1. Open your .doc/.docx file<br>
+2. Click "File" → "Save As" or "Export"<br>
+3. Choose "PDF" as the format<br>
+4. Resubmit the PDF file</p>
+<p>Once you resubmit as PDF, your work will be automatically reviewed and graded. Thank you!</p>
+</div>"""
+                else:
+                    feedback_html = f"""<div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.8; color: #d32f2f; padding: 15px;">
+<p><strong>⚠️ Invalid File Format</strong></p>
+<p>Hi! You submitted a file in an unsupported format.</p>
+<p><strong>Issue:</strong> {review_result['feedback']}</p>
+<p><strong>Required Format:</strong> Please resubmit as <strong>PDF</strong>.</p>
+<p><strong>What to do:</strong><br>
+1. Convert your code/solutions to PDF format<br>
+2. Make sure all your code is visible and readable<br>
+3. Resubmit the assignment</p>
+<p>Please resubmit in PDF format to receive a grade. Looking forward to reviewing your work!</p>
+</div>"""
+                
+                print(f"\n   📋 SUBMITTING FORMAT ERROR FEEDBACK:")
+                print(f"   Student: {student_name}")
+                print(f"   Assignment: {assignment_name}")
+                print(f"   Score: 0/100 (Invalid format)")
+                
+                success, response = submit_marks_and_feedback(details, marks, feedback_html)
+                
+                if success:
+                    # Delete the invalid file
+                    print(f"\n   🗑️  Cleaning up invalid file...")
+                    for file_path in files:
+                        try:
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+                                print(f"   ✅ Deleted: {os.path.basename(file_path)}")
+                        except Exception as e:
+                            print(f"   ⚠️  Could not delete {os.path.basename(file_path)}: {e}")
+                
+            # For valid formats with successful review
+            elif review_result['can_review']:
+                marks = review_result['suggested_marks'] or 0
+                feedback_html = format_feedback_for_submission(review_result)
+                
+                # Show what we're submitting
+                print(f"\n   📋 SUBMISSION DETAILS:")
+                print(f"   Student: {student_name}")
+                print(f"   Assignment: {assignment_name}")
+                print(f"   Score: {marks}/100")
+                
+                # Show clean feedback (without HTML tags)
+                clean_feedback = review_result['review']
+                if '=== SCORE ===' in clean_feedback:
+                    clean_feedback = clean_feedback.split('=== SCORE ===')[0].strip()
+                if '=== REVIEW ===' in clean_feedback:
+                    clean_feedback = clean_feedback.split('=== REVIEW ===')[1].strip()
+                
+                char_count = len(clean_feedback)
+                print(f"\n   💬 FEEDBACK ({char_count} chars):")
+                print(f"   " + "="*50)
+                
+                # Print feedback with indentation
+                for line in clean_feedback.split('\n'):
+                    if line.strip():
+                        print(f"   {line}")
+                print(f"   " + "="*50)
+                
+                success, response = submit_marks_and_feedback(details, marks, feedback_html)
+                
+                if success:
+                    # Delete downloaded files after successful submission
+                    print(f"\n   🗑️  Cleaning up downloaded files...")
+                    for file_path in files:
+                        try:
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+                                print(f"   ✅ Deleted: {os.path.basename(file_path)}")
+                        except Exception as e:
+                            print(f"   ⚠️  Could not delete {os.path.basename(file_path)}: {e}")
+                else:
+                    print(f"   ⚠️  Submission failed - files kept for manual review")
         
         return True
         
@@ -222,6 +452,12 @@ def main():
     # Fetch all pending submissions one at a time
     total_processed = 0
     total_failed = 0
+    total_pdf_graded = 0
+    total_invalid_format = 0
+    total_doc_files = 0
+    total_zip_files = 0
+    total_no_files = 0
+    failed_attempts = []
     page = 1
     
     while True:
@@ -237,14 +473,54 @@ def main():
             break
         
         submission = submissions[0]
+        student_name = submission.get("name", "Unknown")
+        assignment_name = submission.get("assessment_name", "Unknown")
         
         # Process this single submission
-        success = process_submission(submission, total_processed + 1, total_processed + 1, auto_submit=True)
+        success, result_type = process_submission_with_tracking(
+            submission, total_processed + 1, total_processed + 1, auto_submit=True
+        )
         
         if success:
             total_processed += 1
+            # Track what type of submission it was
+            if result_type == 'pdf_graded':
+                total_pdf_graded += 1
+            elif result_type == 'doc_rejected':
+                total_doc_files += 1
+                total_invalid_format += 1
+            elif result_type == 'zip_rejected':
+                total_zip_files += 1
+                total_invalid_format += 1
+            elif result_type == 'no_files':
+                total_no_files += 1
+            elif result_type == 'invalid_format':
+                total_invalid_format += 1
         else:
             total_failed += 1
+            failed_attempts.append({
+                'student': student_name,
+                'assignment': assignment_name,
+                'reason': 'Processing error'
+            })
+            
+            # SOUND ALERT ON FAILURE
+            print("\n🔔 ALERT: Submission failed!")
+            os.system('afplay /System/Library/Sounds/Sosumi.aiff')  # macOS sound
+            
+            # Ask if should continue
+            print("\n⚠️  A submission failed to process.")
+            print("   Options:")
+            print("   1. Press Ctrl+C to stop")
+            print("   2. Wait 10 seconds to continue automatically...")
+            
+            import time
+            try:
+                time.sleep(10)
+                print("   ➡️  Continuing to next submission...")
+            except KeyboardInterrupt:
+                print("\n\n⏸️  Stopped by user after failure.")
+                break
         
         print(f"\n📊 Progress: {total_processed} completed, {total_failed} failed")
         print("-" * 60)
@@ -254,13 +530,48 @@ def main():
         
         page += 1
     
-    print(f"\n{'='*60}")
+    # FINAL DETAILED SUMMARY
+    print(f"\n{'='*70}")
     print(f"🎉 AUTOMATION COMPLETE!")
-    print(f"{'='*60}")
-    print(f"✅ Successfully processed: {total_processed}")
-    print(f"❌ Failed: {total_failed}")
-    print(f"📊 Total: {total_processed + total_failed}")
-    print(f"{'='*60}\n")
+    print(f"{'='*70}")
+    print(f"\n📊 OVERALL STATISTICS:")
+    print(f"   Total Submissions Processed: {total_processed + total_failed}")
+    print(f"   ✅ Successfully Handled: {total_processed}")
+    print(f"   ❌ Failed to Process: {total_failed}")
+    print(f"\n📝 BREAKDOWN BY TYPE:")
+    print(f"   ✅ PDF Files (Graded): {total_pdf_graded}")
+    print(f"   📄 DOC/DOCX Files (Rejected): {total_doc_files}")
+    print(f"   📦 ZIP Files (Rejected): {total_zip_files}")
+    print(f"   ⚠️  No Files Uploaded: {total_no_files}")
+    print(f"   ❌ Other Invalid Formats: {total_invalid_format - total_doc_files - total_zip_files}")
+    
+    # Show failed attempts if any
+    if failed_attempts:
+        print(f"\n⚠️  FAILED SUBMISSIONS ({len(failed_attempts)}):")
+        print(f"{'='*70}")
+        for i, failed in enumerate(failed_attempts, 1):
+            print(f"   {i}. {failed['student']} - {failed['assignment']}")
+            print(f"      Reason: {failed['reason']}")
+        
+        print(f"\n💡 WHAT TO DO WITH FAILED SUBMISSIONS:")
+        print(f"   1. Check the logs above for specific error messages")
+        print(f"   2. Manually review these submissions in your LMS")
+        print(f"   3. Common issues:")
+        print(f"      • Network errors → Re-run the script")
+        print(f"      • API timeout → Re-run the script")
+        print(f"      • Corrupted files → Contact student for resubmission")
+        print(f"   4. Files are saved in assignments/ folder for manual review")
+    
+    print(f"\n{'='*70}")
+    print(f"📈 SUCCESS RATE: {(total_processed/(total_processed+total_failed)*100):.1f}%" if (total_processed+total_failed) > 0 else "N/A")
+    print(f"{'='*70}")
+    
+    if total_invalid_format > 0:
+        print(f"\n📌 NOTE: {total_invalid_format} students received 0 marks with")
+        print(f"   instructions to resubmit in PDF format.")
+        print(f"   They can resubmit and get automatically graded!")
+    
+    print(f"\n✅ All done! Check your LMS for submitted grades.\n")
 
 
 if __name__ == "__main__":

@@ -16,12 +16,20 @@ else:
 
 def is_valid_file_type(filepath):
     """
-    Check if file is PDF or DOC
-    Returns: (is_valid: bool, extension: str)
+    Check if file is supported by Gemini AI
+    Returns: (is_valid: bool, extension: str, can_ai_review: bool)
     """
-    valid_extensions = ['.pdf', '.doc', '.docx']
+    # Only PDF is fully supported by Gemini File API
+    ai_supported = ['.pdf']
+    # DOC/DOCX are valid but need conversion
+    valid_but_unsupported = ['.doc', '.docx']
+    
     _, ext = os.path.splitext(filepath.lower())
-    return ext in valid_extensions, ext
+    
+    is_valid = ext in (ai_supported + valid_but_unsupported)
+    can_ai_review = ext in ai_supported
+    
+    return is_valid, ext, can_ai_review
 
 
 def review_assignment(filepath):
@@ -37,7 +45,7 @@ def review_assignment(filepath):
     }
     """
     # Check file type first
-    is_valid, ext = is_valid_file_type(filepath)
+    is_valid, ext, can_ai_review = is_valid_file_type(filepath)
     
     if not is_valid:
         return {
@@ -45,7 +53,17 @@ def review_assignment(filepath):
             'can_review': False,
             'review': None,
             'suggested_marks': None,
-            'feedback': f"❌ Invalid file format ({ext}). Please submit in .pdf or .doc/.docx format."
+            'feedback': f"❌ Invalid file format ({ext}). Please submit as PDF."
+        }
+    
+    # Check if AI can review this format
+    if not can_ai_review:
+        return {
+            'is_valid_format': False,  # Treat as invalid to trigger 0 marks
+            'can_review': False,
+            'review': None,
+            'suggested_marks': None,
+            'feedback': f"❌ File format not supported for AI review ({ext}). Please convert to PDF and resubmit."
         }
     
     # Check if AI is configured
@@ -62,7 +80,7 @@ def review_assignment(filepath):
     try:
         print(f"🤖 Reviewing {os.path.basename(filepath)} with AI...")
         
-        # For PDF files, Gemini can read them directly!
+        # Gemini can only read PDF files directly via File API
         if ext == '.pdf':
             # Upload the file
             uploaded_file = genai.upload_file(filepath)
@@ -152,16 +170,6 @@ IMPORTANT: Keep the ENTIRE ==="REVIEW === section under 600 characters. Be conci
                 'review': review_text,
                 'suggested_marks': suggested_marks,
                 'feedback': review_text
-            }
-        
-        else:
-            # For DOC files, need to extract text first (can add later)
-            return {
-                'is_valid_format': True,
-                'can_review': False,
-                'review': None,
-                'suggested_marks': None,
-                'feedback': "⚠️ DOC file support coming soon. Please submit as PDF for AI review."
             }
     
     except Exception as e:
