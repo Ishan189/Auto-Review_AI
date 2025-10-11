@@ -449,7 +449,43 @@ def main():
     print("   • No user input required")
     print("   • Continues until all submissions done\n")
     
-    # Fetch all pending submissions one at a time
+    # First, fetch ALL pending submissions to show total count
+    print("📊 Fetching all pending submissions...")
+    all_submissions = []
+    page = 1
+    per_page = 10  # Fetch in batches of 50
+    
+    while True:
+        batch = fetch_submissions(page=page, per_page=per_page)
+        if not batch:
+            break
+        all_submissions.extend(batch)
+        if len(batch) < per_page:
+            break
+        page += 1
+    
+    if not all_submissions:
+        print("✅ No pending submissions to evaluate!")
+        return
+    
+    # Show total count and summary
+    print(f"\n{'='*70}")
+    print(f"📋 FOUND {len(all_submissions)} PENDING SUBMISSION(S) TO EVALUATE")
+    print(f"{'='*70}")
+    print(f"\n📝 Preview (first 10):")
+    for i, sub in enumerate(all_submissions[:10], 1):
+        name = sub.get("name", "Unknown")
+        assignment = sub.get("assessment_name", "N/A")
+        print(f"   {i}. {name} - {assignment}")
+    
+    if len(all_submissions) > 10:
+        print(f"   ... and {len(all_submissions) - 10} more")
+    
+    print(f"\n{'='*70}")
+    print(f"🚀 Starting automated processing of {len(all_submissions)} submission(s)...")
+    print(f"{'='*70}\n")
+    
+    # Now process each submission one by one
     total_processed = 0
     total_failed = 0
     total_pdf_graded = 0
@@ -458,27 +494,17 @@ def main():
     total_zip_files = 0
     total_no_files = 0
     failed_attempts = []
-    page = 1
     
-    while True:
-        # Fetch ONE submission at a time
+    for idx, submission in enumerate(all_submissions, 1):
         print(f"\n{'='*60}")
-        print(f"🔍 Checking for submission #{total_processed + 1}...")
+        print(f"🔍 Processing submission {idx}/{len(all_submissions)}...")
         print(f"{'='*60}")
-        
-        submissions = fetch_submissions(page=page, per_page=1)
-        
-        if not submissions:
-            print("✅ No more submissions to process!")
-            break
-        
-        submission = submissions[0]
         student_name = submission.get("name", "Unknown")
         assignment_name = submission.get("assessment_name", "Unknown")
         
         # Process this single submission
         success, result_type = process_submission_with_tracking(
-            submission, total_processed + 1, total_processed + 1, auto_submit=True
+            submission, idx, len(all_submissions), auto_submit=True
         )
         
         if success:
@@ -522,13 +548,12 @@ def main():
                 print("\n\n⏸️  Stopped by user after failure.")
                 break
         
-        print(f"\n📊 Progress: {total_processed} completed, {total_failed} failed")
+        print(f"\n📊 Progress: {idx}/{len(all_submissions)} | ✅ {total_processed} completed | ❌ {total_failed} failed")
         print("-" * 60)
         
-        # Wait before next submission (rate limiting)
-        wait_between_requests()
-        
-        page += 1
+        # Wait before next submission (rate limiting) - except for last one
+        if idx < len(all_submissions):
+            wait_between_requests()
     
     # FINAL DETAILED SUMMARY
     print(f"\n{'='*70}")
