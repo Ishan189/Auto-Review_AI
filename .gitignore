@@ -1,0 +1,16 @@
+*assignments
+*.pdf
+*.docx
+*.doc
+*.txt
+*.csv
+*.json
+*.xml
+*.yaml
+*.yml
+*.html
+*.css
+*.zip
+/venv
+.env
+*pycache*
