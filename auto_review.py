@@ -431,6 +431,12 @@ def process_batch(submissions, start_index, auto_submit=False):
 
 def main():
     """Main function - fully automated processing"""
+    import time
+    from datetime import datetime, timedelta
+    
+    start_time = time.time()
+    start_datetime = datetime.now()
+    
     print_header()
     
     # Check if API is accessible
@@ -493,9 +499,17 @@ def main():
     total_doc_files = 0
     total_zip_files = 0
     total_no_files = 0
+    total_api_calls = 0  # Track Gemini API usage
+    total_lms_api_calls = 0  # Track LMS API calls
     failed_attempts = []
     
+    # Time tracking
+    submission_times = []
+    api_call_times = []
+    
     for idx, submission in enumerate(all_submissions, 1):
+        submission_start = time.time()
+        
         print(f"\n{'='*60}")
         print(f"🔍 Processing submission {idx}/{len(all_submissions)}...")
         print(f"{'='*60}")
@@ -507,11 +521,20 @@ def main():
             submission, idx, len(all_submissions), auto_submit=True
         )
         
+        # Track timing
+        submission_time = time.time() - submission_start
+        submission_times.append(submission_time)
+        
+        # Track API calls timing
+        api_call_times.append(time.time())
+        total_lms_api_calls += 2  # fetch_details + submit_marks (minimum)
+        
         if success:
             total_processed += 1
             # Track what type of submission it was
             if result_type == 'pdf_graded':
                 total_pdf_graded += 1
+                total_api_calls += 1  # PDF reviews use Gemini API
             elif result_type == 'doc_rejected':
                 total_doc_files += 1
                 total_invalid_format += 1
@@ -548,21 +571,71 @@ def main():
                 print("\n\n⏸️  Stopped by user after failure.")
                 break
         
+        # Calculate rate (requests per minute)
+        elapsed = time.time() - start_time
+        rpm_lms = (total_lms_api_calls / elapsed) * 60 if elapsed > 0 else 0
+        rpm_gemini = (total_api_calls / elapsed) * 60 if elapsed > 0 else 0
+        
         print(f"\n📊 Progress: {idx}/{len(all_submissions)} | ✅ {total_processed} completed | ❌ {total_failed} failed")
+        print(f"⏱️  Time: {submission_time:.1f}s this submission | {elapsed/60:.1f}min total")
+        print(f"📡 Rate: LMS={rpm_lms:.1f} req/min | Gemini={rpm_gemini:.1f} req/min")
+        
+        # Warnings if approaching limits
+        if rpm_gemini > 12:
+            print(f"⚠️  WARNING: Gemini rate approaching limit (15 req/min)")
+        if rpm_lms > 50:
+            print(f"⚠️  WARNING: LMS rate is high - risk of rate limiting")
+        
         print("-" * 60)
         
         # Wait before next submission (rate limiting) - except for last one
         if idx < len(all_submissions):
             wait_between_requests()
     
+    # Calculate final timing stats
+    end_time = time.time()
+    end_datetime = datetime.now()
+    total_elapsed = end_time - start_time
+    total_minutes = total_elapsed / 60
+    total_hours = total_elapsed / 3600
+    
+    avg_time = sum(submission_times) / len(submission_times) if submission_times else 0
+    min_time = min(submission_times) if submission_times else 0
+    max_time = max(submission_times) if submission_times else 0
+    
+    # Calculate final rates
+    final_rpm_lms = (total_lms_api_calls / total_elapsed) * 60 if total_elapsed > 0 else 0
+    final_rpm_gemini = (total_api_calls / total_elapsed) * 60 if total_elapsed > 0 else 0
+    
     # FINAL DETAILED SUMMARY
     print(f"\n{'='*70}")
     print(f"🎉 AUTOMATION COMPLETE!")
     print(f"{'='*70}")
+    print(f"\n⏱️  TIMING SUMMARY:")
+    print(f"   Started: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   Ended: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   Total Duration: {int(total_minutes)} min {int(total_elapsed % 60)} sec")
+    if total_hours >= 1:
+        print(f"   Total Duration: {total_hours:.2f} hours")
+    print(f"   Avg per submission: {avg_time:.1f}s")
+    print(f"   Fastest: {min_time:.1f}s | Slowest: {max_time:.1f}s")
     print(f"\n📊 OVERALL STATISTICS:")
     print(f"   Total Submissions Processed: {total_processed + total_failed}")
     print(f"   ✅ Successfully Handled: {total_processed}")
     print(f"   ❌ Failed to Process: {total_failed}")
+    print(f"\n🌐 API USAGE & RATE LIMITS:")
+    print(f"   📡 Gemini API Calls: {total_api_calls}")
+    print(f"   📡 LMS API Calls: {total_lms_api_calls}")
+    print(f"   📊 Avg Rate - Gemini: {final_rpm_gemini:.1f} req/min (limit: 15)")
+    print(f"   📊 Avg Rate - LMS: {final_rpm_lms:.1f} req/min")
+    print(f"   💰 Gemini Cost: $0.00 (Free tier)")
+    print(f"   📊 Gemini Remaining today: ~{1500 - total_api_calls} requests (of 1,500 daily limit)")
+    
+    # Rate limit warnings
+    if final_rpm_gemini > 10:
+        print(f"\n   ⚠️  Gemini rate was {final_rpm_gemini:.1f} req/min - consider slower delays")
+    else:
+        print(f"\n   ✅ Gemini rate was safe ({final_rpm_gemini:.1f} req/min < 15 limit)")
     print(f"\n📝 BREAKDOWN BY TYPE:")
     print(f"   ✅ PDF Files (Graded): {total_pdf_graded}")
     print(f"   📄 DOC/DOCX Files (Rejected): {total_doc_files}")

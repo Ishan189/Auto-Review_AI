@@ -118,6 +118,9 @@ IMPORTANT: Keep the ENTIRE ==="REVIEW === section under 600 characters. Be conci
             response = model.generate_content([prompt, uploaded_file])
             review_text = response.text
             
+            # Track API usage (this counts as 1 request to Gemini)
+            print(f"  📡 API Call: 1 request to Gemini")
+            
             # Enforce character limit
             MAX_CHARS = 800
             if len(review_text) > MAX_CHARS:
