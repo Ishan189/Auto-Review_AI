@@ -2,16 +2,15 @@
 AI Reviewer - Reviews assignments using Google Gemini API
 """
 import os
-import google.generativeai as genai
+from google import genai
 from config import GEMINI_API_KEY
 
 
-# Configure Gemini
+# Configure Gemini with new API
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-2.5-flash')  # Fast and efficient!
+    client = genai.Client(api_key=GEMINI_API_KEY)
 else:
-    model = None
+    client = None
 
 
 def is_valid_file_type(filepath):
@@ -32,16 +31,22 @@ def is_valid_file_type(filepath):
     return is_valid, ext, can_ai_review
 
 
-def review_assignment(filepath):
+def review_assignment(filepath, max_retries=3, student_name=None):
     """
-    Review an assignment file using AI
+    Review an assignment file using AI with retry logic
+    
+    Args:
+        filepath: Path to the assignment file
+        max_retries: Maximum number of retry attempts (default: 3)
+        student_name: Optional student name to personalize feedback
     
     Returns: {
         'is_valid_format': bool,
         'can_review': bool,
         'review': str or None,
         'suggested_marks': int or None,
-        'feedback': str
+        'feedback': str,
+        'retry_count': int
     }
     """
     # Check file type first
@@ -53,7 +58,8 @@ def review_assignment(filepath):
             'can_review': False,
             'review': None,
             'suggested_marks': None,
-            'feedback': f"❌ Invalid file format ({ext}). Please submit as PDF."
+            'feedback': f"❌ Invalid file format ({ext}). Please submit as PDF.",
+            'retry_count': 0
         }
     
     # Check if AI can review this format
@@ -63,81 +69,115 @@ def review_assignment(filepath):
             'can_review': False,
             'review': None,
             'suggested_marks': None,
-            'feedback': f"❌ File format not supported for AI review ({ext}). Please convert to PDF and resubmit."
+            'feedback': f"❌ File format not supported for AI review ({ext}). Please convert to PDF and resubmit.",
+            'retry_count': 0
         }
     
     # Check if AI is configured
-    if not model:
+    if not client:
         return {
             'is_valid_format': True,
             'can_review': False,
             'review': None,
             'suggested_marks': None,
-            'feedback': "⚠️ AI review not configured. Please set GEMINI_API_KEY in .env"
+            'feedback': "⚠️ AI review not configured. Please set GEMINI_API_KEY in .env",
+            'retry_count': 0
         }
     
-    # Review with AI
-    try:
-        print(f"🤖 Reviewing {os.path.basename(filepath)} with AI...")
-        
-        # Gemini can only read PDF files directly via File API
-        if ext == '.pdf':
-            # Upload the file
-            uploaded_file = genai.upload_file(filepath)
+    # Review with AI - with retry logic
+    import time
+    retry_count = 0
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                # Incremental backoff: 5s, 10s, 15s
+                wait_time = 5 * attempt
+                print(f"🔄 Retry attempt {attempt + 1}/{max_retries} (waiting {wait_time}s)...")
+                time.sleep(wait_time)
+            else:
+                print(f"🤖 Reviewing {os.path.basename(filepath)} with AI...")
             
-            prompt = """
-You are an experienced programming instructor. Write BRIEF, encouraging feedback.
+            retry_count = attempt + 1
+            
+            # Gemini can only read PDF files directly via File API
+            if ext == '.pdf':
+                # Upload PDF file using new API
+                print(f"  📤 Uploading PDF file...")
+                uploaded_file = client.files.upload(file=filepath)
+                print(f"  ✅ File uploaded successfully")
+            
+            # Get first name from student_name if provided
+            first_name = ""
+            if student_name:
+                first_name = student_name.split()[0]  # Get first name
+            
+            prompt = f"""
+You are a programming instructor reviewing this student's assignment. Give helpful feedback.
 
-CRITICAL RULES:
-- Maximum 800 characters for entire feedback (strictly enforce)
-- Be concise but warm and human-like
-- Never mention AI, automation, or being computer-generated
-- Sound like a real teacher
+STRICT RULES:
+- MAXIMUM 800 characters total (CRITICAL - will be truncated if longer)
+- Be warm, sound like a real teacher (never mention AI)
+- Give specific feedback with examples
+- Balance praise with constructive criticism
 
-Format EXACTLY like this:
+FORMAT:
 
 === REVIEW ===
-Hi! [1 sentence about the submission]
+Hi{' ' + first_name if first_name else ''}! [1 sentence about submission]
 
 **Strengths:**
-- [2-3 brief positive points]
+- [2-3 brief specific points about what worked well]
 
-**Improvements Needed:**
-- [2-3 brief, specific fixes]
+**Areas for Improvement:**
+- [2-3 brief points: what's wrong, how to fix]
 
-[1 sentence encouragement]
+**Moving Forward:**
+- [1 tip for improvement]
+
 
 === SCORE ===
-MARKS: [number only, 0-100]
+MARKS: [number 0-100]
 
-JUSTIFICATION: [One brief sentence]
-
-IMPORTANT: Keep the ENTIRE ==="REVIEW === section under 600 characters. Be concise!
+KEEP IT BRIEF! Reference specific problems from the PDF. Max 800 characters!
 """
             
-            response = model.generate_content([prompt, uploaded_file])
+            # Generate review using new API
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[prompt, uploaded_file]
+            )
             review_text = response.text
             
             # Track API usage (this counts as 1 request to Gemini)
             print(f"  📡 API Call: 1 request to Gemini")
             
-            # Enforce character limit
+            # Check and enforce strict character limit of 800
+            word_count = len(review_text.split())
+            print(f"  📝 Feedback length: {len(review_text)} chars, ~{word_count} words")
+            
+            # STRICT 800 character limit
             MAX_CHARS = 800
             if len(review_text) > MAX_CHARS:
                 print(f"  ⚠️  Feedback too long ({len(review_text)} chars), truncating to {MAX_CHARS}...")
-                # Split by sections
+                # Split by sections to preserve structure
                 if '=== SCORE ===' in review_text:
                     review_part = review_text.split('=== SCORE ===')[0].strip()
                     score_part = '=== SCORE ===' + review_text.split('=== SCORE ===')[1]
                     
-                    # Truncate review part if needed
+                    # Truncate review part to fit within limit (reserve ~150 chars for score section)
                     max_review_chars = 600
                     if len(review_part) > max_review_chars:
                         review_part = review_part[:max_review_chars].rsplit('.', 1)[0] + '.'
                     
                     review_text = review_part + '\n\n' + score_part
+                    
+                    # Final check - if still too long, hard truncate
+                    if len(review_text) > MAX_CHARS:
+                        review_text = review_text[:MAX_CHARS].rsplit('.', 1)[0] + '.'
                 else:
-                    # Fallback: simple truncation
+                    # Fallback: simple truncation at sentence boundary
                     review_text = review_text[:MAX_CHARS].rsplit('.', 1)[0] + '.'
                 
                 print(f"  ✅ Truncated to {len(review_text)} characters")
@@ -172,18 +212,40 @@ IMPORTANT: Keep the ENTIRE ==="REVIEW === section under 600 characters. Be conci
                 'can_review': True,
                 'review': review_text,
                 'suggested_marks': suggested_marks,
-                'feedback': review_text
+                'feedback': review_text,
+                'retry_count': retry_count
             }
+        
+        except Exception as e:
+            last_error = e
+            print(f"❌ Error during AI review (attempt {attempt + 1}/{max_retries}): {e}")
+            
+            # If this is not the last attempt, continue to retry
+            if attempt < max_retries - 1:
+                continue
+            else:
+                # All retries exhausted
+                print(f"❌ All {max_retries} retry attempts failed!")
+                return {
+                    'is_valid_format': False,
+                    'can_review': False,
+                    'review': None,
+                    'suggested_marks': None,
+                    'feedback': f"AI_REVIEW_FAILED: {str(last_error)}",
+                    'retry_count': retry_count,
+                    'error': str(last_error)
+                }
     
-    except Exception as e:
-        print(f"❌ Error during AI review: {e}")
-        return {
-            'is_valid_format': True,
-            'can_review': False,
-            'review': None,
-            'suggested_marks': None,
-            'feedback': f"✅ File format valid, but AI review failed: {str(e)}"
-        }
+    # This shouldn't be reached, but just in case
+    return {
+        'is_valid_format': False,
+        'can_review': False,
+        'review': None,
+        'suggested_marks': None,
+        'feedback': f"AI_REVIEW_FAILED: {str(last_error) if last_error else 'Unknown error'}",
+        'retry_count': retry_count,
+        'error': str(last_error) if last_error else 'Unknown error'
+    }
 
 
 def format_feedback_for_submission(review_result):

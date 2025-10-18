@@ -145,7 +145,7 @@ def process_submission_with_tracking(submission, index, total, auto_submit=False
         main_file = files[0]
         print(f"   🤖 Reviewing {os.path.basename(main_file)}...")
         
-        review_result = review_assignment(main_file)
+        review_result = review_assignment(main_file, student_name=student_name)
         
         # Determine result type
         file_ext = os.path.splitext(main_file)[1].lower()
@@ -176,7 +176,14 @@ def process_submission_with_tracking(submission, index, total, auto_submit=False
             if not review_result['is_valid_format']:
                 marks = 0
                 
-                if '.doc' in review_result['feedback'].lower():
+                # Check if this is an AI review failure - DON'T submit feedback
+                if 'AI_REVIEW_FAILED' in review_result['feedback']:
+                    print(f"   ❌ AI Review Failed - NOT submitting feedback")
+                    print(f"   🔍 Error: {review_result.get('error', 'Unknown error')}")
+                    print(f"   🔄 Retries attempted: {review_result.get('retry_count', 0)}")
+                    print(f"\n   ⚠️  Script will terminate - manual review required")
+                    return False, 'ai_failure'  # Return False to indicate failure
+                elif '.doc' in review_result['feedback'].lower():
                     feedback_html = f"""<div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.8; color: #ff9800; padding: 15px;">
 <p><strong>📄 Document Format Not Supported</strong></p>
 <p>Hi! You submitted a .doc/.docx file, which cannot be automatically reviewed by our system.</p>
@@ -234,7 +241,8 @@ def process_submission_with_tracking(submission, index, total, auto_submit=False
                     clean_feedback = clean_feedback.split('=== REVIEW ===')[1].strip()
                 
                 char_count = len(clean_feedback)
-                print(f"\n   💬 FEEDBACK ({char_count} chars):")
+                word_count = len(clean_feedback.split())
+                print(f"\n   💬 FEEDBACK ({char_count} chars, ~{word_count} words):")
                 print(f"   " + "="*50)
                 
                 for line in clean_feedback.split('\n'):
@@ -300,7 +308,7 @@ def process_submission(submission, index, total, auto_submit=False):
         main_file = files[0]
         print(f"   🤖 Reviewing {os.path.basename(main_file)}...")
         
-        review_result = review_assignment(main_file)
+        review_result = review_assignment(main_file, student_name=student_name)
         
         # Step 4: Show review result
         if not review_result['is_valid_format']:
@@ -318,8 +326,15 @@ def process_submission(submission, index, total, auto_submit=False):
             if not review_result['is_valid_format']:
                 marks = 0
                 
+                # Check if this is an AI review failure - DON'T submit feedback
+                if 'AI_REVIEW_FAILED' in review_result['feedback']:
+                    print(f"   ❌ AI Review Failed - NOT submitting feedback")
+                    print(f"   🔍 Error: {review_result.get('error', 'Unknown error')}")
+                    print(f"   🔄 Retries attempted: {review_result.get('retry_count', 0)}")
+                    print(f"\n   ⚠️  Script will terminate - manual review required")
+                    return False  # Return False to indicate failure (process_submission returns bool only)
                 # Customize message based on file type
-                if '.doc' in review_result['feedback'].lower():
+                elif '.doc' in review_result['feedback'].lower():
                     feedback_html = f"""<div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.8; color: #ff9800; padding: 15px;">
 <p><strong>📄 Document Format Not Supported</strong></p>
 <p>Hi! You submitted a .doc/.docx file, which cannot be automatically reviewed by our system.</p>
@@ -550,26 +565,28 @@ def main():
             failed_attempts.append({
                 'student': student_name,
                 'assignment': assignment_name,
-                'reason': 'Processing error'
+                'reason': 'AI review failed after max retries'
             })
             
             # SOUND ALERT ON FAILURE
-            print("\n🔔 ALERT: Submission failed!")
+            print("\n🔔 ALERT: AI Review Failed!")
             os.system('afplay /System/Library/Sounds/Sosumi.aiff')  # macOS sound
             
-            # Ask if should continue
-            print("\n⚠️  A submission failed to process.")
-            print("   Options:")
-            print("   1. Press Ctrl+C to stop")
-            print("   2. Wait 10 seconds to continue automatically...")
-            
-            import time
-            try:
-                time.sleep(10)
-                print("   ➡️  Continuing to next submission...")
-            except KeyboardInterrupt:
-                print("\n\n⏸️  Stopped by user after failure.")
-                break
+            # Terminate script immediately on AI failure
+            print(f"\n{'='*70}")
+            print("❌ SCRIPT TERMINATED - AI REVIEW FAILURE")
+            print(f"{'='*70}")
+            print(f"\n📊 Stats before termination:")
+            print(f"   Processed: {total_processed}/{len(all_submissions)}")
+            print(f"   Successfully graded: {total_pdf_graded}")
+            print(f"   Failed on: {student_name} - {assignment_name}")
+            print(f"\n💡 What to do:")
+            print(f"   1. Check the error message above")
+            print(f"   2. Fix the issue (API key, network, etc.)")
+            print(f"   3. Re-run the script - it will process remaining submissions")
+            print(f"\n📂 Files preserved in assignments/ folder for manual review")
+            print(f"{'='*70}\n")
+            break  # Terminate the loop immediately
         
         # Calculate rate (requests per minute)
         elapsed = time.time() - start_time
