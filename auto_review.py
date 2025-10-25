@@ -145,7 +145,18 @@ def process_submission_with_tracking(submission, index, total, auto_submit=False
         main_file = files[0]
         print(f"   🤖 Reviewing {os.path.basename(main_file)}...")
         
-        review_result = review_assignment(main_file, student_name=student_name)
+        # Extract total marks from submission details
+        total_marks = 100  # Default fallback
+        if 'exercise' in details:
+            exercise = details['exercise']
+            # Look for common total marks fields
+            for field in ['total_marks', 'max_marks', 'marks', 'total_score', 'max_score']:
+                if field in exercise and exercise[field]:
+                    total_marks = int(exercise[field])
+                    print(f"   📊 Found total marks: {total_marks}")
+                    break
+        
+        review_result = review_assignment(main_file, student_name=student_name, total_marks=total_marks)
         
         # Determine result type
         file_ext = os.path.splitext(main_file)[1].lower()
@@ -169,7 +180,7 @@ def process_submission_with_tracking(submission, index, total, auto_submit=False
         else:
             print(f"   ✅ Review Complete!")
             if review_result['suggested_marks']:
-                print(f"   📊 Score: {review_result['suggested_marks']}/100")
+                print(f"   📊 Score: {review_result['suggested_marks']}/{total_marks}")
         
         # Submit feedback
         if auto_submit:
@@ -232,7 +243,7 @@ def process_submission_with_tracking(submission, index, total, auto_submit=False
                 print(f"\n   📋 SUBMISSION DETAILS:")
                 print(f"   Student: {student_name}")
                 print(f"   Assignment: {assignment_name}")
-                print(f"   Score: {marks}/100")
+                print(f"   Score: {marks}/{total_marks}")
                 
                 clean_feedback = review_result['review']
                 if '=== SCORE ===' in clean_feedback:
@@ -318,7 +329,7 @@ def process_submission(submission, index, total, auto_submit=False):
         else:
             print(f"   ✅ Review Complete!")
             if review_result['suggested_marks']:
-                print(f"   📊 Score: {review_result['suggested_marks']}/100")
+                print(f"   📊 Score: {review_result['suggested_marks']}/{total_marks}")
         
         # Step 5: Submit feedback (even for invalid formats)
         if auto_submit:
@@ -386,7 +397,7 @@ def process_submission(submission, index, total, auto_submit=False):
                 print(f"\n   📋 SUBMISSION DETAILS:")
                 print(f"   Student: {student_name}")
                 print(f"   Assignment: {assignment_name}")
-                print(f"   Score: {marks}/100")
+                print(f"   Score: {marks}/{total_marks}")
                 
                 # Show clean feedback (without HTML tags)
                 clean_feedback = review_result['review']

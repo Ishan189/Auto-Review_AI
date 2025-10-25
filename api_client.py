@@ -38,7 +38,19 @@ def fetch_submission_details(attempt_id):
         try:
             res = requests.get(url, headers=HEADERS, timeout=30)
             res.raise_for_status()
-            return res.json()
+            data = res.json()
+            
+            # Debug: Print available fields to find total marks
+            if attempt == 0:  # Only print on first attempt
+                print(f"\n   🔍 DEBUG: Available fields in submission details:")
+                print(f"   Exercise fields: {list(data.get('exercise', {}).keys())}")
+                if 'exercise' in data:
+                    exercise = data['exercise']
+                    for key, value in exercise.items():
+                        if 'mark' in key.lower() or 'score' in key.lower() or 'total' in key.lower() or 'max' in key.lower():
+                            print(f"   📊 {key}: {value}")
+            
+            return data
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:

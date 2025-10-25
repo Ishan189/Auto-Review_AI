@@ -45,6 +45,25 @@ def submit_marks_and_feedback(submission_details, marks, feedback_html):
         print(f"\n   ✅ SUBMITTED TO LMS SUCCESSFULLY!")
         return True, response.json()
         
+    except requests.exceptions.HTTPError as e:
+        print(f"\n   ❌ SUBMISSION FAILED: {e}")
+        
+        # Show exact error details
+        print(f"\n   🔍 EXACT ERROR MESSAGE:")
+        print(f"   Status Code: {e.response.status_code}")
+        print(f"   URL: {url}")
+        
+        # Show response body with exact error
+        try:
+            response_body = e.response.text
+            if response_body:
+                print(f"\n   📥 SERVER RESPONSE:")
+                print(f"   {response_body}")
+        except:
+            pass
+        
+        return False, None
+        
     except Exception as e:
         print(f"\n   ❌ SUBMISSION FAILED: {e}")
         return False, None

@@ -31,7 +31,7 @@ def is_valid_file_type(filepath):
     return is_valid, ext, can_ai_review
 
 
-def review_assignment(filepath, max_retries=3, student_name=None):
+def review_assignment(filepath, max_retries=3, student_name=None, total_marks=100):
     """
     Review an assignment file using AI with retry logic
     
@@ -39,6 +39,7 @@ def review_assignment(filepath, max_retries=3, student_name=None):
         filepath: Path to the assignment file
         max_retries: Maximum number of retry attempts (default: 3)
         student_name: Optional student name to personalize feedback
+        total_marks: Total marks for the assignment (default: 100)
     
     Returns: {
         'is_valid_format': bool,
@@ -138,7 +139,7 @@ Hi{' ' + first_name if first_name else ''}! [1 sentence about submission]
 
 
 === SCORE ===
-MARKS: [number 0-100]
+MARKS: [number 0-{total_marks}]
 
 KEEP IT BRIEF! Reference specific problems from the PDF. Max 800 characters!
 """
@@ -193,19 +194,19 @@ KEEP IT BRIEF! Reference specific problems from the PDF. Max 800 characters!
             if match:
                 marks = int(match.group(1))
                 # Ensure it's within valid range
-                suggested_marks = min(max(marks, 0), 100)
+                suggested_marks = min(max(marks, 0), total_marks)
             else:
-                # Fallback: search for any number out of 100 pattern
-                fallback_pattern = r'(\d+)\s*/\s*100'
+                # Fallback: search for any number out of total_marks pattern
+                fallback_pattern = rf'(\d+)\s*/\s*{total_marks}'
                 fallback_match = re.search(fallback_pattern, review_text)
                 if fallback_match:
                     suggested_marks = int(fallback_match.group(1))
                 else:
-                    # Default if no marks found
-                    suggested_marks = 70
+                    # Default if no marks found (70% of total)
+                    suggested_marks = int(total_marks * 0.7)
                     print(f"  ⚠️ Could not parse marks, defaulting to {suggested_marks}")
             
-            print(f"  📊 Extracted Score: {suggested_marks}/100")
+            print(f"  📊 Extracted Score: {suggested_marks}/{total_marks}")
             
             return {
                 'is_valid_format': True,
