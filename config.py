@@ -13,6 +13,7 @@ BASE_URL = os.getenv("BASE_URL")
 
 # AI Review API Key (Google Gemini)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+MODEL_NAME = os.getenv("MODEL_NAME")
 
 # Rate Limiting Settings (with safe defaults)
 MIN_DELAY_BETWEEN_REQUESTS = float(os.getenv("MIN_DELAY_BETWEEN_REQUESTS", "2"))

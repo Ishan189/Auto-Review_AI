@@ -3,7 +3,7 @@ AI Reviewer - Reviews assignments using Google Gemini API
 """
 import os
 from google import genai
-from config import GEMINI_API_KEY
+from config import GEMINI_API_KEY, MODEL_NAME
 
 
 # Configure Gemini with new API
@@ -146,7 +146,7 @@ KEEP IT BRIEF! Reference specific problems from the PDF. Max 800 characters!
             
             # Generate review using new API
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model=MODEL_NAME,
                 contents=[prompt, uploaded_file]
             )
             review_text = response.text
