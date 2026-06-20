@@ -3,7 +3,6 @@ API Client - Handles all API requests with rate limiting protection
 """
 import time
 import random
-import json
 import re
 import requests
 from config import (
@@ -12,25 +11,90 @@ from config import (
 )
 
 
-def fetch_submissions(page=1, per_page=10):
+def _parse_retry_wait(response):
+    """Parse wait time (in seconds) from a 429 response. Returns None if unparseable."""
+    try:
+        msg = response.json().get("message", "")
+        match = re.search(r'after\s+([\d.]+)\s+minutes?', msg, re.IGNORECASE)
+        if match:
+            return int(float(match.group(1)) * 60)
+    except Exception:
+        pass
+    retry_after = response.headers.get("Retry-After")
+    if retry_after and retry_after.isdigit():
+        return int(retry_after)
+    return None
+
+
+def _extract_total_count(data):
     """
-    Fetch list of submissions from API
-    This is lightweight - usually doesn't get rate limited
+    Best-effort extraction of the server-reported total submission count
+    from a paginated response. Different LMS APIs use different field names,
+    so we check the common ones and return None if nothing matches.
     """
-    url = f"{BASE_URL}/submissions?page={page}&per_page={per_page}&evaluated=0&search=&sort_order=D&sort_by=submission_time&filters=%5C{{%5C}}"
-    response = requests.get(url, headers=HEADERS, timeout=30)
-    response.raise_for_status()
-    data = response.json()
-    return data.get("submission", [])
+    if not isinstance(data, dict):
+        return None
+    # Common top-level keys
+    for key in ("total", "total_count", "totalCount", "count",
+                "total_records", "totalRecords", "total_results"):
+        value = data.get(key)
+        if isinstance(value, int) and value >= 0:
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+    # Sometimes nested under 'pagination' / 'meta'
+    for container_key in ("pagination", "meta", "paging"):
+        container = data.get(container_key)
+        if isinstance(container, dict):
+            nested = _extract_total_count(container)
+            if nested is not None:
+                return nested
+    return None
+
+
+def fetch_submissions(page=1, per_page=50, days_back=30, return_total=False):
+    """
+    Fetch list of submissions from API with retry logic for rate limits.
+    Uses server-side date filtering to limit results.
+
+    Args:
+        page: 1-based page index
+        per_page: page size
+        days_back: how many days back to filter
+        return_total: when True, returns (submissions, total_count_or_None)
+                      so callers can stop paginating once all records are seen.
+                      When False (default, for backwards compatibility),
+                      returns just the list of submissions.
+    """
+    end_date = int(time.time())
+    start_date = end_date - (days_back * 24 * 3600)
+    url = (f"{BASE_URL}/submissions?page={page}&per_page={per_page}&evaluated=0"
+           f"&search=&sort_order=D&sort_by=submission_time"
+           f"&start_date={start_date}&end_date={end_date}"
+           f"&filters=%5C{{%5C}}")
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            submissions = data.get("submission", []) or []
+            if return_total:
+                return submissions, _extract_total_count(data)
+            return submissions
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                wait = _parse_retry_wait(e.response) or RETRY_BASE_DELAY * (attempt + 1)
+                wait += random.randint(2, 10)
+                print(f"\n   ⚠️  Rate limited on page {page}, waiting {wait}s (retry {attempt+1}/{MAX_RETRIES})...")
+                time.sleep(wait)
+            else:
+                raise
+    raise Exception(f"Failed to fetch submissions page {page} after {MAX_RETRIES} retries")
 
 
 def fetch_submission_details(attempt_id):
     """
     Fetch details for a specific submission with retry logic
-    
-    THIS is the endpoint that gets rate limited!
-    - Called once per submission (many times per batch)
-    - Has heavy retry logic with exponential backoff
     """
     url = f"{BASE_URL}/assignment/pasttest/{attempt_id}"
     
@@ -38,84 +102,19 @@ def fetch_submission_details(attempt_id):
         try:
             res = requests.get(url, headers=HEADERS, timeout=30)
             res.raise_for_status()
-            data = res.json()
-            
-            # Debug: Print available fields to find total marks
-            if attempt == 0:  # Only print on first attempt
-                print(f"\n   🔍 DEBUG: Available fields in submission details:")
-                print(f"   Exercise fields: {list(data.get('exercise', {}).keys())}")
-                if 'exercise' in data:
-                    exercise = data['exercise']
-                    for key, value in exercise.items():
-                        if 'mark' in key.lower() or 'score' in key.lower() or 'total' in key.lower() or 'max' in key.lower():
-                            print(f"   📊 {key}: {value}")
-            
-            return data
+            return res.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:
-                # Rate limited - show ALL details from response
-                print(f"\n{'='*60}")
-                print(f"⚠️  RATE LIMITED (429 Error)")
-                print(f"{'='*60}")
-                print(f"URL: {url}")
-                print(f"Status Code: {e.response.status_code}")
-                
-                # Check for Retry-After header
-                retry_after = e.response.headers.get('Retry-After')
-                if retry_after:
-                    print(f"🕐 Retry-After Header: {retry_after} seconds")
-                
-                # Show all relevant headers
-                print(f"\n📋 Response Headers:")
-                for key, value in e.response.headers.items():
-                    if key.lower() in ['retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining', 
-                                       'x-ratelimit-reset', 'x-rate-limit-limit', 'x-rate-limit-remaining']:
-                        print(f"   {key}: {value}")
-                
-                # Try to parse response body for wait time
-                wait_minutes = None
-                try:
-                    response_body = e.response.text
-                    if response_body:
-                        print(f"\n📄 Response Body:")
-                        print(f"   {response_body[:500]}")  # First 500 chars
-                        
-                        # Try to parse JSON response
-                        try:
-                            response_json = json.loads(response_body)
-                            message = response_json.get("message", "")
-                            
-                            # Extract minutes from message like "Try after 2.82 minutes"
-                            match = re.search(r'after\s+([\d.]+)\s+minutes?', message, re.IGNORECASE)
-                            if match:
-                                wait_minutes = float(match.group(1))
-                                print(f"\n🕐 Server says: Wait {wait_minutes} minutes")
-                        except:
-                            pass
-                except:
-                    pass
-                
-                # Calculate wait time (priority: message > Retry-After > exponential backoff)
-                if wait_minutes:
-                    # Use the exact time from server message, add 5s buffer
-                    wait_time = int(wait_minutes * 60) + 5
-                    print(f"   Using server's wait time: {wait_time}s ({wait_minutes:.2f} minutes + 5s buffer)")
-                elif retry_after and retry_after.isdigit():
-                    wait_time = int(retry_after) + random.randint(2, 5)
-                    print(f"   Using Retry-After header: {wait_time}s")
-                else:
-                    wait_time = (attempt + 1) * RETRY_BASE_DELAY + random.randint(5, 15)
-                    print(f"   Using exponential backoff: {wait_time}s")
-                
-                print(f"\n⏳ Waiting {wait_time}s before retry {attempt + 1}/{MAX_RETRIES}...")
-                print(f"{'='*60}\n")
-                time.sleep(wait_time)
+                wait = _parse_retry_wait(e.response) or (attempt + 1) * RETRY_BASE_DELAY
+                wait += random.randint(2, 10)
+                print(f"   ⚠️  Rate limited, waiting {wait}s (retry {attempt+1}/{MAX_RETRIES})...")
+                time.sleep(wait)
             else:
                 raise
                 
         except requests.exceptions.Timeout:
-            print(f"⏱️  Request timed out, retrying ({attempt + 1}/{MAX_RETRIES})...")
+            print(f"   ⏱️  Timeout, retrying ({attempt+1}/{MAX_RETRIES})...")
             time.sleep(5)
     
     raise Exception(f"Failed to fetch details for attempt {attempt_id} after {MAX_RETRIES} retries")

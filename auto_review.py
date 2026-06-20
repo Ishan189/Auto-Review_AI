@@ -481,23 +481,67 @@ def main():
     print("   • No user input required")
     print("   • Continues until all submissions done\n")
     
-    # First, fetch ALL pending submissions to show total count
-    print("📊 Fetching all pending submissions...")
+    # Fetch pending submissions from last 30 days (server-side filtered)
+    print("📊 Fetching pending submissions (last 30 days)...")
     all_submissions = []
+    seen_ids = set()
     page = 1
-    per_page = 10  # Fetch in batches of 50
-    
-    while True:
-        batch = fetch_submissions(page=page, per_page=per_page)
+    per_page = 50
+    server_total = None  # Total reported by the API, when available
+    # Hard safety cap so a misbehaving paginator can't loop forever
+    MAX_PAGES = 200
+
+    while page <= MAX_PAGES:
+        print(f"   Fetching page {page}...", end=" ", flush=True)
+        batch, total_from_api = fetch_submissions(
+            page=page, per_page=per_page, days_back=30, return_total=True
+        )
+
+        if total_from_api is not None and server_total is None:
+            server_total = total_from_api
+
         if not batch:
+            print("empty.")
             break
-        all_submissions.extend(batch)
+
+        # Deduplicate across pages — guards against APIs that occasionally
+        # repeat records or shift items between pages while we paginate.
+        new_items = [s for s in batch if s.get("attempt_id") not in seen_ids]
+        for s in new_items:
+            aid = s.get("attempt_id")
+            if aid is not None:
+                seen_ids.add(aid)
+        all_submissions.extend(new_items)
+
+        dup_count = len(batch) - len(new_items)
+        total_label = (
+            f"{len(all_submissions)}/{server_total}"
+            if server_total is not None
+            else f"{len(all_submissions)}"
+        )
+        dup_note = f" (skipped {dup_count} duplicate)" if dup_count else ""
+        print(f"got {len(batch)} (total: {total_label}){dup_note}")
+
+        # Stop when the API tells us we've seen everything
+        if server_total is not None and len(all_submissions) >= server_total:
+            break
+
+        # Partial last page — no more data
         if len(batch) < per_page:
             break
+
+        # If a full page contributed nothing new, the paginator is repeating;
+        # bail out instead of looping forever.
+        if not new_items:
+            print("   ⚠️  Page returned only duplicates — stopping pagination.")
+            break
+
         page += 1
-    
+    else:
+        print(f"   ⚠️  Hit MAX_PAGES safety cap ({MAX_PAGES}); stopping pagination.")
+
     if not all_submissions:
-        print("✅ No pending submissions to evaluate!")
+        print("✅ No pending submissions in the last 30 days!")
         return
     
     # Show total count and summary
